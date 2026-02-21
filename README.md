@@ -15,6 +15,9 @@ The `noat` command (pronounced like "note") reads posts from a git repo and
 publishes any markdown files that do not have `AT_URL` in frontmatter.
 It uploads a post excerpt plus a backlink to your blog URL.
 
+I made this for a specific project. I am going to be publishing a
+collection of images, and I wanted a copy both on my website and on Bluesky.
+
 
 <details><summary><h2>Contents</h2></summary>
 
