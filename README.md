@@ -1,6 +1,16 @@
 # noat
 
-Publish your blog posts to bluesky via a command line tool.
+[![tests](https://img.shields.io/github/actions/workflow/status/atprism/noat/nodejs.yml?style=flat-square)](https://github.com/atprism/noat/actions/workflows/nodejs.yml)
+[![types](https://img.shields.io/npm/types/@atprism/icons?style=flat-square)](README.md)
+[![module](https://img.shields.io/badge/module-ESM-blue?style=flat-square)](README.md)
+[![semantic versioning](https://img.shields.io/badge/semver-2.0.0-blue?logo=semver&style=flat-square)](https://semver.org/)
+[![Common Changelog](https://nichoth.github.io/badge/common-changelog.svg)](./CHANGELOG.md)
+[![install size](https://flat.badgen.net/packagephobia/install/@atprism/noat)](https://packagephobia.com/result?p=@atprism/noat)
+[![gzip size](https://flat.badgen.net/bundlephobia/minzip/@atprism/noat)](https://bundlephobia.com/package/@atprism/noat)
+[![license](https://img.shields.io/badge/license-Big_Time-blue?style=flat-square)](LICENSE)
+
+
+Node + AT protocol. Publish your blog posts to bluesky via a command line tool.
 
 The `noat` command (pronounced like "note") reads posts from a git repo and
 publishes any markdown files that do not have `AT_URL` in frontmatter.
@@ -51,7 +61,8 @@ value for `handle`, and a `.env` file with a variable
 
 ## Publish
 
-State is kept in the markdown files' frontmatter.
+State is kept in the markdown files' frontmatter. Any file with a field
+`AT_URL` is considered to have been published already.
 
 * Requires a clean git state (no uncommited changes)
 * Posts with an `AT_URL` frontmatter field are treated as already published.
@@ -74,13 +85,14 @@ npx noat help
 ```
 
 
-## Configuration
+## Config
 
 `noat` auto-loads the first file found in this order:
 
 1. `noat.config.ts`
 2. `noat.config.js`
 3. `noat.config.json`
+
 
 ### Options
 
@@ -116,8 +128,7 @@ export default {
 }
 ```
 
-
-Config fields:
+#### Config fields
 
 * `handle` (required): account handle.
 * `pdsUrl` (optional): defaults to `https://bsky.social`.
@@ -130,7 +141,7 @@ Config fields:
 * `dryRun` (optional): same behavior as `--dry-run`.
 * `verbose` (optional): same behavior as `--verbose`.
 
-Config-file keys and matching CLI flags:
+#### Config-file keys and matching CLI flags
 
 * `handle` -> `--handle`
 * `pdsUrl` -> `--pds-url`
@@ -142,7 +153,8 @@ Config-file keys and matching CLI flags:
 * `dryRun` -> `--dry-run`
 * `verbose` -> `--verbose`
 
-Path resolution rules:
+
+### Path resolution rules:
 
 * `posts` is resolved relative to the config file directory.
 * If no config file is loaded, `posts` is resolved relative to current
@@ -175,7 +187,7 @@ Body content for your static site.
 ![Diagram alt text](./images/launch.png)
 ```
 
-Publishing rules:
+## Publishing rules
 
 * Bluesky text comes from frontmatter field `post`
   (or your configured `postTextField`).
