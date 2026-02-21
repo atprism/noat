@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, extname, posix, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -8,11 +9,10 @@ import { build } from 'esbuild'
 
 const DEFAULT_PDS_URL = 'https://bsky.social'
 const DEFAULT_POSTS_DIR = './posts'
-const DEFAULT_STATE_FILE = '.nat/published.json'
-const DEFAULT_PASSWORD_ENV_VAR = 'NAT_BLUESKY_APP_PASSWORD'
+const DEFAULT_PASSWORD_ENV_VAR = 'NOAT_BLUESKY_APP_PASSWORD'
 const DEFAULT_POST_TEXT_FIELD = 'post'
-const DEFAULT_IMAGE_FIELD = 'image'
-const DEFAULT_IMAGE_ALT_FIELD = 'imageAlt'
+const DEFAULT_AT_URL_FIELD = 'AT_URL'
+const PUBLISH_COMMIT_PREFIX = 'AT proto publish '
 
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown'])
 
@@ -26,222 +26,103 @@ const IMAGE_MIME_BY_EXTENSION:Record<string, string> = {
 }
 
 interface BlueskyBlob {
-    [key: string]: unknown
+    [key:string]:unknown
 }
 
 interface BlueskySession {
-    accessJwt: string
-    did: string
+    accessJwt:string
+    did:string
 }
 
 interface CreateRecordResponse {
-    uri: string
-    cid: string
+    uri:string
+    cid:string
 }
 
-export interface NatConfig {
-    handle?: string
-    pdsUrl?: string
-    postsDir?: string
-    stateFile?: string
-    passwordEnvVar?: string
-    postTextField?: string
-    imageField?: string
-    imageAltField?: string
-    bluesky?: {
-        handle?: string
-        pdsUrl?: string
-        passwordEnvVar?: string
-    }
+export interface NoatConfig {
+    cwd?:string
+    handle?:string
+    pdsUrl?:string
+    posts?:string
+    passwordEnvVar?:string
+    postTextField?:string
+    baseUrl?:string
+    dryRun?:boolean
+    verbose?:boolean
 }
 
 export interface ResolvedConfig {
-    handle: string
-    pdsUrl: string
-    postsDir: string
-    stateFile: string
-    passwordEnvVar: string
-    postTextField: string
-    imageField: string
-    imageAltField: string
-}
-
-export interface PublishedPostState {
-    sourceHash: string
-    uri: string
-    cid: string
-    publishedAt: string
-}
-
-export interface PublishState {
-    version: number
-    posts: Record<string, PublishedPostState>
+    handle:string
+    pdsUrl:string
+    postsDir:string
+    passwordEnvVar:string
+    postTextField:string
+    baseUrl:string
 }
 
 export interface PublishOptions {
-    cwd?: string
-    configPath?: string
-    postsDir?: string
-    dryRun?: boolean
-    verbose?: boolean
+    cwd?:string
+    configPath?:string
+    handle?:string
+    pdsUrl?:string
+    postsDir?:string
+    passwordEnvVar?:string
+    postTextField?:string
+    baseUrl?:string
+    dryRun?:boolean
+    verbose?:boolean
 }
 
 export interface PublishSummary {
-    dryRun: boolean
-    totalPosts: number
-    skippedPosts: number
-    queuedPosts: number
-    publishedPosts: number
-    stateFile: string
+    dryRun:boolean
+    totalPosts:number
+    skippedPosts:number
+    queuedPosts:number
+    publishedPosts:number
 }
 
 export interface CliIO {
-    log: (...args: any[]) => void
-    error: (...args: any[]) => void
+    log:(...args:any[])=>void
+    error:(...args:any[])=>void
 }
 
 interface ParsedPostFields {
-    text: string
-    imagePath?: string
-    imageAlt: string
+    text:string
+    imagePath?:string
+    imageAlt:string
 }
 
 interface DraftPost {
-    path: string
-    sourceHash: string
-    text: string
-    image?: {
-        path: string
-        alt: string
-        mimeType: string
-        bytes: Buffer
+    path:string
+    text:string
+    image?:{
+        path:string
+        alt:string
+        mimeType:string
+        bytes:Buffer
     }
-}
-
-interface ParsedCli {
-    command: 'publish' | 'help'
-    options: PublishOptions
 }
 
 interface LoadConfigResult {
-    path: string | null
-    config: NatConfig
+    path:string|null
+    config:NoatConfig
 }
 
 type JsonRecord = Record<string, unknown>
-type FetchLike = (url: string, init?: Record<string, unknown>) => Promise<any>
+type FetchLike = (url:string, init?:Record<string, unknown>)=>Promise<any>
+
+const require = createRequire(import.meta.url)
+const yaml = require('js-yaml') as { load:(source:string)=>unknown }
 
 const DEFAULT_IO:CliIO = {
-    log: (...args: any[]) => { console.log(...args) },
-    error: (...args: any[]) => { console.error(...args) }
+    log: (...args:any[]) => { console.log(...args) },
+    error: (...args:any[]) => { console.error(...args) }
 }
 
-export async function runCli (argv: string[], io: CliIO = DEFAULT_IO):Promise<void> {
-    const parsed = parseCliArgs(argv)
-
-    if (parsed.command === 'help') {
-        io.log(getHelpText())
-        return
-    }
-
-    const summary = await runPublish(parsed.options, io)
-    const mode = summary.dryRun ? 'dry run complete' : 'publish complete'
-    io.log(`[nat] ${mode}. queued=${summary.queuedPosts}, published=${summary.publishedPosts}, skipped=${summary.skippedPosts}`)
-}
-
-export function parseCliArgs (argv: string[]):ParsedCli {
-    const args = [...argv]
-    let command:ParsedCli['command'] = 'publish'
-
-    if (args[0] != null && !args[0].startsWith('-')) {
-        const maybeCommand = args.shift()
-        if (maybeCommand === 'publish') {
-            command = 'publish'
-        } else if (maybeCommand === 'help') {
-            command = 'help'
-        } else {
-            throw new Error(`Unknown command "${maybeCommand}". Use "nat help" for usage.`)
-        }
-    }
-
-    const options:PublishOptions = {}
-
-    while (args.length > 0) {
-        const arg = args.shift() as string
-
-        if (arg === '--help' || arg === '-h') {
-            return { command: 'help', options }
-        }
-
-        if (arg === '--dry-run') {
-            options.dryRun = true
-            continue
-        }
-
-        if (arg === '--verbose') {
-            options.verbose = true
-            continue
-        }
-
-        if (arg === '--config') {
-            options.configPath = expectFlagValue('--config', args.shift())
-            continue
-        }
-
-        if (arg.startsWith('--config=')) {
-            options.configPath = arg.slice('--config='.length)
-            continue
-        }
-
-        if (arg === '--posts-dir') {
-            options.postsDir = expectFlagValue('--posts-dir', args.shift())
-            continue
-        }
-
-        if (arg.startsWith('--posts-dir=')) {
-            options.postsDir = arg.slice('--posts-dir='.length)
-            continue
-        }
-
-        if (arg === '--cwd') {
-            options.cwd = expectFlagValue('--cwd', args.shift())
-            continue
-        }
-
-        if (arg.startsWith('--cwd=')) {
-            options.cwd = arg.slice('--cwd='.length)
-            continue
-        }
-
-        throw new Error(`Unknown argument "${arg}". Use "nat help" for usage.`)
-    }
-
-    return { command, options }
-}
-
-function expectFlagValue (flag: string, value: string | undefined):string {
-    if (value == null || value.trim() === '') {
-        throw new Error(`Flag ${flag} expects a value`)
-    }
-    return value
-}
-
-function getHelpText ():string {
-    return [
-        'nat - Bluesky one-to-many publishing CLI',
-        '',
-        'Usage:',
-        '  nat publish [--config path] [--posts-dir path] [--dry-run] [--verbose]',
-        '  nat help',
-        '',
-        'Notes:',
-        '  - Config file lookup: nat.config.ts, nat.config.js, nat.config.json',
-        '  - Password source: .env file and/or process env',
-        '  - Default posts directory: ./posts'
-    ].join('\n')
-}
-
-export async function runPublish (options: PublishOptions = {}, io: CliIO = DEFAULT_IO):Promise<PublishSummary> {
+export async function publish (
+    options:PublishOptions = {},
+    io:CliIO = DEFAULT_IO
+):Promise<PublishSummary> {
     const cwd = resolve(options.cwd ?? process.cwd())
     const envFromFile = await readEnvFile(cwd)
     const env = {
@@ -250,52 +131,56 @@ export async function runPublish (options: PublishOptions = {}, io: CliIO = DEFA
     }
 
     const loaded = await loadConfig(cwd, options.configPath)
+    const configDir = loaded.path == null ? cwd : dirname(loaded.path)
+    const mergedConfig:NoatConfig = {
+        ...loaded.config,
+        ...extractConfigOverrides(options)
+    }
     const config = normalizeConfig({
-        cwd,
+        configDir,
         env,
-        config: loaded.config,
-        postsDirOverride: options.postsDir
+        config: mergedConfig
     })
 
     if (options.verbose) {
         const configuredPath = loaded.path ?? '(defaults only)'
-        io.log(`[nat] config file: ${configuredPath}`)
-        io.log(`[nat] posts dir: ${config.postsDir}`)
-        io.log(`[nat] state file: ${config.stateFile}`)
+        io.log(`[noat] config file: ${configuredPath}`)
+        io.log(`[noat] posts dir: ${config.postsDir}`)
     }
 
     const repoRoot = getRepoRoot(cwd)
     const postsRelativeToRepo = toGitPath(relative(repoRoot, config.postsDir))
 
     if (postsRelativeToRepo.startsWith('../') || postsRelativeToRepo === '..') {
-        throw new Error(`Configured postsDir must be inside the git repo. Received "${config.postsDir}"`)
+        throw new Error(
+            'Configured postsDir must be inside the git repo. ' +
+            `Received "${config.postsDir}"`
+        )
     }
 
     const postsRootSpec = postsRelativeToRepo === '' ? '.' : postsRelativeToRepo
     const postPaths = listMarkdownPosts(repoRoot, postsRootSpec)
-    const state = await loadState(config.stateFile)
     const drafts = buildDrafts({
         repoRoot,
         config,
         postPaths,
-        state
+        postsRootSpec
     })
 
     if (drafts.length === 0) {
-        io.log('[nat] no new posts found to publish')
+        io.log('[noat] no new posts found to publish')
         return {
             dryRun: options.dryRun === true,
             totalPosts: postPaths.length,
             skippedPosts: postPaths.length,
             queuedPosts: 0,
-            publishedPosts: 0,
-            stateFile: config.stateFile
+            publishedPosts: 0
         }
     }
 
     if (options.dryRun === true) {
         for (const draft of drafts) {
-            io.log(`[nat] dry-run would publish ${draft.path}`)
+            io.log(`[noat] dry-run would publish ${draft.path}`)
         }
 
         return {
@@ -303,14 +188,18 @@ export async function runPublish (options: PublishOptions = {}, io: CliIO = DEFA
             totalPosts: postPaths.length,
             skippedPosts: postPaths.length - drafts.length,
             queuedPosts: drafts.length,
-            publishedPosts: 0,
-            stateFile: config.stateFile
+            publishedPosts: 0
         }
     }
 
+    assertGitRepoClean(repoRoot)
+
     const password = resolveString(env[config.passwordEnvVar])
     if (password == null) {
-        throw new Error(`Missing password. Set ${config.passwordEnvVar} in .env or environment.`)
+        throw new Error(
+            `Missing password. Set ${config.passwordEnvVar} ` +
+            'in .env or environment.'
+        )
     }
 
     const fetchImpl = resolveFetchImplementation()
@@ -322,6 +211,7 @@ export async function runPublish (options: PublishOptions = {}, io: CliIO = DEFA
     })
 
     let publishedCount = 0
+    const changedPaths:string[] = []
 
     for (const draft of drafts) {
         const result = await publishDraft({
@@ -330,28 +220,27 @@ export async function runPublish (options: PublishOptions = {}, io: CliIO = DEFA
             session,
             draft
         })
-
-        state.posts[draft.path] = {
-            sourceHash: draft.sourceHash,
-            uri: result.uri,
-            cid: result.cid,
-            publishedAt: new Date().toISOString()
-        }
+        const blueskyUrl = toBlueskyPostUrl(config.handle, result.uri)
+        const changed = await writePublishedAtUrl({
+            repoRoot,
+            postPath: draft.path,
+            atUrl: blueskyUrl
+        })
+        if (changed) changedPaths.push(draft.path)
 
         publishedCount += 1
-        io.log(`[nat] published ${draft.path} -> ${result.uri}`)
+        io.log(`[noat] published ${draft.path} -> ${blueskyUrl}`)
     }
 
-    await saveState(config.stateFile, state)
-    io.log(`[nat] updated publish state at ${config.stateFile}`)
+    const commitMessage = commitPublishedPosts(repoRoot, changedPaths)
+    io.log(`[noat] committed publish metadata: ${commitMessage}`)
 
     return {
         dryRun: false,
         totalPosts: postPaths.length,
         skippedPosts: postPaths.length - drafts.length,
         queuedPosts: drafts.length,
-        publishedPosts: publishedCount,
-        stateFile: config.stateFile
+        publishedPosts: publishedCount
     }
 }
 
@@ -364,13 +253,14 @@ function resolveFetchImplementation ():FetchLike {
     return fetchImpl as FetchLike
 }
 
-async function createSession (params: {
-    fetchImpl: FetchLike
-    pdsUrl: string
-    handle: string
-    password: string
+async function createSession (params:{
+    fetchImpl:FetchLike
+    pdsUrl:string
+    handle:string
+    password:string
 }):Promise<BlueskySession> {
-    const url = `${trimTrailingSlash(params.pdsUrl)}/xrpc/com.atproto.server.createSession`
+    const url = `${trimTrailingSlash(params.pdsUrl)}` +
+        '/xrpc/com.atproto.server.createSession'
     const response = await params.fetchImpl(url, {
         method: 'POST',
         headers: {
@@ -393,11 +283,11 @@ async function createSession (params: {
     return { accessJwt, did }
 }
 
-async function publishDraft (params: {
-    fetchImpl: FetchLike
-    pdsUrl: string
-    session: BlueskySession
-    draft: DraftPost
+async function publishDraft (params:{
+    fetchImpl:FetchLike
+    pdsUrl:string
+    session:BlueskySession
+    draft:DraftPost
 }):Promise<CreateRecordResponse> {
     let blob:BlueskyBlob | undefined
 
@@ -429,7 +319,8 @@ async function publishDraft (params: {
         }
     }
 
-    const url = `${trimTrailingSlash(params.pdsUrl)}/xrpc/com.atproto.repo.createRecord`
+    const url = `${trimTrailingSlash(params.pdsUrl)}` +
+        '/xrpc/com.atproto.repo.createRecord'
     const response = await params.fetchImpl(url, {
         method: 'POST',
         headers: {
@@ -443,24 +334,29 @@ async function publishDraft (params: {
         })
     })
 
-    const json = await parseJsonResponse(response, `create record for ${params.draft.path}`)
+    const context = `create record for ${params.draft.path}`
+    const json = await parseJsonResponse(response, context)
     const uri = resolveString(json.uri)
     const cid = resolveString(json.cid)
     if (uri == null || cid == null) {
-        throw new Error(`Unexpected createRecord response for ${params.draft.path}`)
+        throw new Error(
+            'Unexpected createRecord response for ' +
+            params.draft.path
+        )
     }
 
     return { uri, cid }
 }
 
-async function uploadBlob (params: {
-    fetchImpl: FetchLike
-    pdsUrl: string
-    session: BlueskySession
-    bytes: Buffer
-    mimeType: string
+async function uploadBlob (params:{
+    fetchImpl:FetchLike
+    pdsUrl:string
+    session:BlueskySession
+    bytes:Buffer
+    mimeType:string
 }):Promise<BlueskyBlob> {
-    const url = `${trimTrailingSlash(params.pdsUrl)}/xrpc/com.atproto.repo.uploadBlob`
+    const url = `${trimTrailingSlash(params.pdsUrl)}` +
+        '/xrpc/com.atproto.repo.uploadBlob'
     const response = await params.fetchImpl(url, {
         method: 'POST',
         headers: {
@@ -478,7 +374,10 @@ async function uploadBlob (params: {
     return json.blob as BlueskyBlob
 }
 
-async function parseJsonResponse (response: any, context: string):Promise<JsonRecord> {
+async function parseJsonResponse (
+    response:any,
+    context:string
+):Promise<JsonRecord> {
     const bodyText = await response.text()
     let parsed:unknown = {}
 
@@ -486,13 +385,19 @@ async function parseJsonResponse (response: any, context: string):Promise<JsonRe
         try {
             parsed = JSON.parse(bodyText)
         } catch (error) {
-            throw new Error(`Could not parse JSON for ${context}: ${(error as Error).message}`)
+            const message = (error as Error).message
+            throw new Error(
+                `Could not parse JSON for ${context}: ${message}`
+            )
         }
     }
 
     if (!response.ok) {
         const message = extractApiError(parsed) ?? response.statusText
-        throw new Error(`Bluesky API error (${context}) [${response.status}]: ${message}`)
+        throw new Error(
+            `Bluesky API error (${context}) ` +
+            `[${response.status}]: ${message}`
+        )
     }
 
     if (parsed == null || typeof parsed !== 'object') {
@@ -502,54 +407,92 @@ async function parseJsonResponse (response: any, context: string):Promise<JsonRe
     return parsed as JsonRecord
 }
 
-function extractApiError (payload: unknown):string | null {
+export function toBlueskyPostUrl (handle:string, atUri:string):string {
+    const match = /\/app\.bsky\.feed\.post\/([^/]+)$/.exec(atUri)
+    if (match == null) {
+        throw new Error(`Could not derive Bluesky post URL from "${atUri}"`)
+    }
+
+    const postId = encodeURIComponent(match[1])
+    const encodedHandle = encodeURIComponent(handle)
+    return `https://bsky.app/profile/${encodedHandle}/post/${postId}`
+}
+
+function extractApiError (payload:unknown):string|null {
     if (payload == null || typeof payload !== 'object') return null
     const message = resolveString((payload as JsonRecord).message)
     const error = resolveString((payload as JsonRecord).error)
     return message ?? error ?? null
 }
 
-function trimTrailingSlash (value: string):string {
+function trimTrailingSlash (value:string):string {
     return value.endsWith('/') ? value.slice(0, -1) : value
 }
 
-function buildDrafts (params: {
-    repoRoot: string
-    config: ResolvedConfig
-    postPaths: string[]
-    state: PublishState
+function buildDrafts (params:{
+    repoRoot:string
+    config:ResolvedConfig
+    postPaths:string[]
+    postsRootSpec:string
 }):DraftPost[] {
     const drafts:DraftPost[] = []
 
     for (const postPath of params.postPaths) {
-        const sourceHash = readGitText(params.repoRoot, ['rev-parse', `HEAD:${postPath}`]).trim()
-        const stateEntry = params.state.posts[postPath]
-        if (stateEntry != null && stateEntry.sourceHash === sourceHash) {
-            continue
+        const markdown = readGitBytes(
+            params.repoRoot,
+            ['show', `HEAD:${postPath}`]
+        ).toString('utf8')
+        const frontmatter = splitFrontmatter(markdown).frontmatter
+        const atUrl = getNestedField(frontmatter, DEFAULT_AT_URL_FIELD)
+        if (atUrl !== undefined) continue
+
+        const parsed = parsePostFields(markdown, {
+            postTextField: params.config.postTextField
+        })
+        const backlinkUrl = resolveBacklinkUrl({
+            postPath,
+            postsRootSpec: params.postsRootSpec,
+            frontmatter,
+            config: params.config
+        })
+
+        if (backlinkUrl == null) {
+            throw new Error(
+                'Could not resolve backlink URL for "' +
+                `${postPath}". Set "baseUrl" in noat.config.*.`
+            )
         }
 
-        const markdown = readGitBytes(params.repoRoot, ['cat-file', '-p', sourceHash]).toString('utf8')
-        const parsed = parsePostFields(markdown, {
-            postTextField: params.config.postTextField,
-            imageField: params.config.imageField,
-            imageAltField: params.config.imageAltField
-        })
+        const text = appendBacklink(parsed.text, backlinkUrl)
+        assertPostLength(text, postPath)
+
+        let imageRepoPath:string | undefined
+        let imageBytes:Buffer | undefined
+        let imageMimeType:string | undefined
+
+        if (parsed.imagePath != null) {
+            imageRepoPath = resolveGitRelativePath(postPath, parsed.imagePath)
+            imageBytes = readGitBytes(
+                params.repoRoot,
+                ['show', `HEAD:${imageRepoPath}`]
+            )
+            imageMimeType = detectImageMimeType(imageRepoPath)
+        }
 
         const draft:DraftPost = {
             path: postPath,
-            sourceHash,
-            text: parsed.text
+            text
         }
 
-        if (parsed.imagePath != null) {
-            const imageRepoPath = resolveGitRelativePath(postPath, parsed.imagePath)
-            const imageHash = readGitText(params.repoRoot, ['rev-parse', `HEAD:${imageRepoPath}`]).trim()
-            const imageBytes = readGitBytes(params.repoRoot, ['cat-file', '-p', imageHash])
-
+        if (
+            imageRepoPath != null &&
+            imageBytes != null &&
+            imageMimeType != null
+        ) {
             draft.image = {
                 path: imageRepoPath,
                 alt: parsed.imageAlt,
-                mimeType: detectImageMimeType(imageRepoPath),
+                mimeType: imageMimeType,
                 bytes: imageBytes
             }
         }
@@ -560,18 +503,29 @@ function buildDrafts (params: {
     return drafts
 }
 
-function detectImageMimeType (filePath: string):string {
+function detectImageMimeType (filePath:string):string {
     const extension = extname(filePath).toLowerCase()
     const mimeType = IMAGE_MIME_BY_EXTENSION[extension]
     if (mimeType == null) {
-        throw new Error(`Unsupported image type for "${filePath}". Supported: ${Object.keys(IMAGE_MIME_BY_EXTENSION).join(', ')}`)
+        const supported = Object.keys(IMAGE_MIME_BY_EXTENSION).join(', ')
+        throw new Error(
+            `Unsupported image type for "${filePath}". ` +
+            `Supported: ${supported}`
+        )
     }
 
     return mimeType
 }
 
-function listMarkdownPosts (repoRoot: string, postsDirSpec: string):string[] {
-    const output = readGitText(repoRoot, ['ls-tree', '-r', '--name-only', 'HEAD', '--', postsDirSpec]).trim()
+function listMarkdownPosts (repoRoot:string, postsDirSpec:string):string[] {
+    const output = readGitText(repoRoot, [
+        'ls-tree',
+        '-r',
+        '--name-only',
+        'HEAD',
+        '--',
+        postsDirSpec
+    ]).trim()
     if (output === '') return []
 
     return output
@@ -581,15 +535,53 @@ function listMarkdownPosts (repoRoot: string, postsDirSpec: string):string[] {
         .sort((a, b) => a.localeCompare(b))
 }
 
-function getRepoRoot (cwd: string):string {
+function getRepoRoot (cwd:string):string {
     return readGitText(cwd, ['rev-parse', '--show-toplevel']).trim()
 }
 
-function toGitPath (filePath: string):string {
+function assertGitRepoClean (repoRoot:string):void {
+    const status = readGitText(repoRoot, ['status', '--porcelain']).trim()
+    if (status !== '') {
+        throw new Error(
+            'Git repo is not clean. Commit or stash local changes before ' +
+            'publishing.'
+        )
+    }
+}
+
+function commitPublishedPosts (repoRoot:string, postPaths:string[]):string {
+    if (postPaths.length === 0) {
+        throw new Error(
+            'No post files changed after publishing; nothing to commit.'
+        )
+    }
+
+    const commitNumber = getNextPublishCommitNumber(repoRoot)
+    const message = `${PUBLISH_COMMIT_PREFIX}${commitNumber}`
+    readGitText(repoRoot, ['add', '--', ...postPaths])
+    readGitText(repoRoot, ['commit', '-m', message])
+    return message
+}
+
+export function getNextPublishCommitNumber (repoRoot:string):number {
+    const subjects = readGitText(repoRoot, ['log', '--format=%s']).trim()
+    if (subjects === '') return 1
+
+    for (const subject of subjects.split('\n')) {
+        const match = /^AT proto publish (\d+)$/.exec(subject.trim())
+        if (match == null) continue
+        const previous = Number.parseInt(match[1], 10)
+        return Number.isNaN(previous) ? 1 : previous + 1
+    }
+
+    return 1
+}
+
+function toGitPath (filePath:string):string {
     return filePath.replace(/\\/g, '/')
 }
 
-function readGitText (cwd: string, args: string[]):string {
+function readGitText (cwd:string, args:string[]):string {
     try {
         return execFileSync('git', args, {
             cwd,
@@ -602,7 +594,7 @@ function readGitText (cwd: string, args: string[]):string {
     }
 }
 
-function readGitBytes (cwd: string, args: string[]):Buffer {
+function readGitBytes (cwd:string, args:string[]):Buffer {
     try {
         return execFileSync('git', args, {
             cwd,
@@ -615,10 +607,10 @@ function readGitBytes (cwd: string, args: string[]):Buffer {
     }
 }
 
-function gitErrorMessage (error: unknown):string {
+function gitErrorMessage (error:unknown):string {
     if (error == null || typeof error !== 'object') return 'unknown git error'
 
-    const maybeError = error as { stderr?: Buffer | string; message?: string }
+    const maybeError = error as { stderr?:Buffer|string; message?:string }
     if (maybeError.stderr != null) {
         const stderr = maybeError.stderr.toString().trim()
         if (stderr !== '') return stderr
@@ -628,40 +620,37 @@ function gitErrorMessage (error: unknown):string {
 }
 
 export function parsePostFields (
-    markdown: string,
-    options: { postTextField: string, imageField: string, imageAltField: string }
+    markdown:string,
+    options:{ postTextField:string }
 ):ParsedPostFields {
     const parsed = splitFrontmatter(markdown)
     const frontmatter = parsed.frontmatter
+    const firstImage = findFirstMarkdownImage(parsed.content)
 
     const text = firstString(frontmatter, uniquePaths([
         options.postTextField,
         'bluesky.text',
         'text',
         'post'
-    ])) ?? parsed.content.trim()
+    ])) ?? stripMarkdownImages(parsed.content).trim()
 
     if (text == null || text.trim() === '') {
-        throw new Error('Missing post text. Set a frontmatter field (default "post") or markdown content.')
+        throw new Error(
+            'Missing post text. Set a frontmatter field ' +
+            '(default "post") or markdown content.'
+        )
     }
 
     const characterCount = Array.from(text).length
     if (characterCount > 300) {
-        throw new Error(`Post text must be 300 characters or fewer. Received ${characterCount}.`)
+        throw new Error(
+            'Post text must be 300 characters or fewer. ' +
+            `Received ${characterCount}.`
+        )
     }
 
-    const imagePath = firstString(frontmatter, uniquePaths([
-        options.imageField,
-        'bluesky.image',
-        'image'
-    ]))
-
-    const imageAlt = firstString(frontmatter, uniquePaths([
-        options.imageAltField,
-        'bluesky.imageAlt',
-        'imageAlt',
-        'alt'
-    ])) ?? ''
+    const imagePath = firstImage?.path
+    const imageAlt = firstImage?.alt ?? ''
 
     return {
         text,
@@ -670,7 +659,121 @@ export function parsePostFields (
     }
 }
 
-function uniquePaths (paths: string[]):string[] {
+function assertPostLength (text:string, postPath:string):void {
+    const characterCount = Array.from(text).length
+    if (characterCount > 300) {
+        throw new Error(
+            'Post text must be 300 chars or fewer after adding backlink. ' +
+            `Post "${postPath}" is ${characterCount}.`
+        )
+    }
+}
+
+interface MarkdownImageReference {
+    alt:string
+    path:string
+}
+
+export function findFirstMarkdownImage (
+    content:string
+):MarkdownImageReference | null {
+    const match = /!\[([^\]]*)\]\(([^)\n]+)\)/.exec(content)
+    if (match == null) return null
+
+    const alt = match[1]?.trim() ?? ''
+    const target = match[2]?.trim() ?? ''
+    const path = parseMarkdownImagePath(target)
+    if (path == null) return null
+
+    return { alt, path }
+}
+
+export function appendBacklink (text:string, backlinkUrl:string):string {
+    if (text.includes(backlinkUrl)) return text
+    return `${text}\n\n${backlinkUrl}`
+}
+
+export function resolveBacklinkUrl (params:{
+    postPath:string
+    postsRootSpec:string
+    frontmatter:Record<string, unknown>
+    config:ResolvedConfig
+}):string|null {
+    const slug = firstString(params.frontmatter, uniquePaths([
+        'slug',
+        'bluesky.slug'
+    ]))
+    if (slug == null) {
+        return backlinkFromPostPath(
+            params.config.baseUrl,
+            params.postsRootSpec,
+            params.postPath
+        )
+    }
+
+    const baseUrl = trimTrailingSlash(params.config.baseUrl)
+    const normalizedSlug = slug.trim().replace(/^\/+|\/+$/g, '')
+    if (normalizedSlug === '') return baseUrl
+
+    const encodedSlug = normalizedSlug
+        .split('/')
+        .filter(Boolean)
+        .map(segment => encodeURIComponent(segment))
+        .join('/')
+
+    return `${baseUrl}/${encodedSlug}`
+}
+
+function backlinkFromPostPath (
+    baseUrl:string,
+    postsRootSpec:string,
+    postPath:string
+):string {
+    const normalizedBaseUrl = trimTrailingSlash(baseUrl)
+    const postsRoot = normalizePostsRoot(postsRootSpec)
+    const postRelativePath = postsRoot === ''
+        ? postPath
+        : postPath.replace(`${postsRoot}/`, '')
+    const pathWithoutExtension = postRelativePath
+        .replace(/\.markdown$/i, '')
+        .replace(/\.md$/i, '')
+    const canonicalPath = pathWithoutExtension.endsWith('/index')
+        ? pathWithoutExtension.slice(0, -('/index'.length))
+        : pathWithoutExtension
+    const encodedPath = canonicalPath
+        .split('/')
+        .filter(Boolean)
+        .map(segment => encodeURIComponent(segment))
+        .join('/')
+
+    if (encodedPath === '') return normalizedBaseUrl
+    return `${normalizedBaseUrl}/${encodedPath}`
+}
+
+function normalizePostsRoot (postsRootSpec:string):string {
+    if (postsRootSpec === '.') return ''
+    return postsRootSpec.replace(/^\.\/+/, '').replace(/\/+$/, '')
+}
+
+function parseMarkdownImagePath (target:string):string|null {
+    if (target === '') return null
+
+    if (target.startsWith('<')) {
+        const closing = target.indexOf('>')
+        if (closing <= 1) return null
+        return target.slice(1, closing).trim()
+    }
+
+    const firstToken = target.split(/\s+/)[0]?.trim()
+    if (firstToken == null || firstToken === '') return null
+    return firstToken
+}
+
+function stripMarkdownImages (content:string):string {
+    return content.replace(/!\[[^\]]*\]\([^)\n]+\)/g, '').trim()
+}
+
+function uniquePaths (paths:string[]):string[] {
     const seen = new Set<string>()
     const output:string[] = []
 
@@ -684,9 +787,9 @@ function uniquePaths (paths: string[]):string[] {
     return output
 }
 
-export function splitFrontmatter (markdown: string):{
-    frontmatter: Record<string, unknown>
-    content: string
+export function splitFrontmatter (markdown:string):{
+    frontmatter:Record<string, unknown>
+    content:string
 } {
     const lines = markdown.split(/\r?\n/)
     if (lines[0]?.trim() !== '---') {
@@ -715,95 +818,141 @@ export function splitFrontmatter (markdown: string):{
     const content = lines.slice(closingIndex + 1).join('\n')
 
     return {
-        frontmatter: parseSimpleYaml(frontmatterText),
+        frontmatter: parseYamlFrontmatter(frontmatterText),
         content
     }
 }
 
-function parseSimpleYaml (yamlText: string):Record<string, unknown> {
-    const root:Record<string, unknown> = {}
-    const stack:Array<{ indent: number, value: Record<string, unknown> }> = [
-        { indent: -1, value: root }
-    ]
+async function writePublishedAtUrl (params:{
+    repoRoot:string
+    postPath:string
+    atUrl:string
+}):Promise<boolean> {
+    const absolutePath = resolve(params.repoRoot, params.postPath)
+    const source = await readFile(absolutePath, 'utf8')
+    const next = upsertFrontmatterField(
+        source,
+        DEFAULT_AT_URL_FIELD,
+        params.atUrl
+    )
 
-    for (const line of yamlText.split('\n')) {
-        const trimmed = line.trim()
-        if (trimmed === '' || trimmed.startsWith('#')) continue
-
-        const indent = countIndent(line)
-        const content = line.slice(indent)
-
-        const separator = content.indexOf(':')
-        if (separator === -1) {
-            throw new Error(`Invalid frontmatter line "${content}"`)
-        }
-
-        const key = content.slice(0, separator).trim()
-        const valueText = content.slice(separator + 1).trim()
-        if (key === '') {
-            throw new Error(`Invalid frontmatter key in "${content}"`)
-        }
-
-        while (stack.length > 1 && indent <= stack[stack.length - 1].indent) {
-            stack.pop()
-        }
-
-        const parent = stack[stack.length - 1].value
-
-        if (valueText === '') {
-            const nested:Record<string, unknown> = {}
-            parent[key] = nested
-            stack.push({ indent, value: nested })
-            continue
-        }
-
-        parent[key] = parseYamlScalar(valueText)
-    }
-
-    return root
+    if (next === source) return false
+    await writeFile(absolutePath, next, 'utf8')
+    return true
 }
 
-function countIndent (line: string):number {
-    let count = 0
-    for (let index = 0; index < line.length; index += 1) {
-        if (line[index] === ' ') {
-            count += 1
-            continue
+export function upsertFrontmatterField (
+    markdown:string,
+    field:string,
+    value:string
+):string {
+    const lines = markdown.split(/\r?\n/)
+    const renderedField = `${field}: ${JSON.stringify(value)}`
+    const hasTrailingNewline = markdown.endsWith('\n')
+
+    if (lines[0]?.trim() === '---') {
+        let closingIndex = -1
+        for (let index = 1; index < lines.length; index += 1) {
+            if (lines[index].trim() === '---') {
+                closingIndex = index
+                break
+            }
         }
-        break
+
+        if (closingIndex !== -1) {
+            const fieldPattern = new RegExp(`^${escapeRegex(field)}\\s*:`)
+            let didReplace = false
+            for (let index = 1; index < closingIndex; index += 1) {
+                if (fieldPattern.test(lines[index])) {
+                    lines[index] = renderedField
+                    didReplace = true
+                    break
+                }
+            }
+
+            if (!didReplace) {
+                lines.splice(closingIndex, 0, renderedField)
+            }
+
+            return finalizeNewline(lines.join('\n'), hasTrailingNewline)
+        }
     }
-    return count
+
+    const prefixed = [
+        '---',
+        renderedField,
+        '---',
+        markdown
+    ].join('\n')
+
+    return finalizeNewline(prefixed, hasTrailingNewline)
 }
 
-function parseYamlScalar (value: string):unknown {
-    if (value === 'true') return true
-    if (value === 'false') return false
-    if (value === 'null') return null
-
-    if (/^-?\d+$/.test(value)) {
-        return Number.parseInt(value, 10)
+function finalizeNewline (
+    text:string,
+    hasTrailingNewline:boolean
+):string {
+    if (hasTrailingNewline) {
+        return text.endsWith('\n') ? text : `${text}\n`
     }
 
-    if (/^-?\d+\.\d+$/.test(value)) {
-        return Number.parseFloat(value)
-    }
-
-    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
-        const inner = value.slice(1, -1)
-        return inner
-            .replace(/\\n/g, '\n')
-            .replace(/\\"/g, '"')
-            .replace(/\\\\/g, '\\')
-    }
-
-    if (value.startsWith('\'') && value.endsWith('\'') && value.length >= 2) {
-        return value.slice(1, -1)
-    }
-
-    return value
+    return text.endsWith('\n') ? text.slice(0, -1) : text
 }
 
-function firstString (data: Record<string, unknown>, fieldPaths: string[]):string | undefined {
+export function stripFrontmatterField (
+    markdown:string,
+    field:string
+):string {
+    const lines = markdown.split(/\r?\n/)
+    if (lines[0]?.trim() !== '---') return markdown
+
+    let closingIndex = -1
+    for (let index = 1; index < lines.length; index += 1) {
+        if (lines[index].trim() === '---') {
+            closingIndex = index
+            break
+        }
+    }
+
+    if (closingIndex === -1) return markdown
+
+    const fieldPattern = new RegExp(`^${escapeRegex(field)}\\s*:`)
+    const withoutField = lines
+        .slice(1, closingIndex)
+        .filter(line => !fieldPattern.test(line))
+    const rebuilt = [
+        '---',
+        ...withoutField,
+        '---',
+        ...lines.slice(closingIndex + 1)
+    ].join('\n')
+
+    return finalizeNewline(rebuilt, markdown.endsWith('\n'))
+}
+
+function escapeRegex (value:string):string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function parseYamlFrontmatter (yamlText:string):Record<string, unknown> {
+    try {
+        const parsed = yaml.load(yamlText)
+        if (parsed == null) return {}
+        if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('frontmatter must be an object')
+        }
+
+        return parsed as Record<string, unknown>
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        throw new Error(`Invalid YAML frontmatter: ${message}`)
+    }
+}
+
+function firstString (
+    data:Record<string, unknown>,
+    fieldPaths:string[]
+):string | undefined {
     for (const fieldPath of fieldPaths) {
         const value = getNestedField(data, fieldPath)
         const text = resolveString(value)
@@ -815,7 +964,10 @@ function firstString (data: Record<string, unknown>, fieldPaths: string[]):strin
     return undefined
 }
 
-export function getNestedField (data: Record<string, unknown>, fieldPath: string):unknown {
+export function getNestedField (
+    data:Record<string, unknown>,
+    fieldPath:string
+):unknown {
     const segments = fieldPath.split('.').filter(Boolean)
     let current:unknown = data
 
@@ -830,14 +982,28 @@ export function getNestedField (data: Record<string, unknown>, fieldPath: string
     return current
 }
 
-function resolveString (value: unknown):string | undefined {
+function resolveString (value:unknown):string | undefined {
     if (typeof value !== 'string') return undefined
     const trimmed = value.trim()
     return trimmed === '' ? undefined : trimmed
 }
 
-export function resolveGitRelativePath (postPath: string, assetPath: string):string {
+export function resolveGitRelativePath (
+    postPath:string,
+    assetPath:string
+):string {
     const normalizedInput = assetPath.replace(/\\/g, '/')
+
+    if (
+        /^[a-z]+:\/\//i.test(normalizedInput) ||
+        normalizedInput.startsWith('data:')
+    ) {
+        throw new Error(
+            'Only repository file paths are supported for images. ' +
+            `Received "${assetPath}"`
+        )
+    }
+
     const resolvedPath = normalizedInput.startsWith('/')
         ? posix.normalize(normalizedInput.slice(1))
         : posix.normalize(posix.join(posix.dirname(postPath), normalizedInput))
@@ -854,7 +1020,7 @@ export function resolveGitRelativePath (postPath: string, assetPath: string):str
     return resolvedPath
 }
 
-export function parseDotEnv (source: string):Record<string, string> {
+export function parseDotEnv (source:string):Record<string, string> {
     const env:Record<string, string> = {}
 
     for (const rawLine of source.split(/\r?\n/)) {
@@ -874,7 +1040,11 @@ export function parseDotEnv (source: string):Record<string, string> {
                 .replace(/\\n/g, '\n')
                 .replace(/\\"/g, '"')
                 .replace(/\\\\/g, '\\')
-        } else if (value.startsWith('\'') && value.endsWith('\'') && value.length >= 2) {
+        } else if (
+            value.startsWith('\'') &&
+            value.endsWith('\'') &&
+            value.length >= 2
+        ) {
             value = value.slice(1, -1)
         } else {
             const commentIndex = value.indexOf(' #')
@@ -889,7 +1059,7 @@ export function parseDotEnv (source: string):Record<string, string> {
     return env
 }
 
-export async function readEnvFile (cwd: string):Promise<Record<string, string>> {
+export async function readEnvFile (cwd:string):Promise<Record<string, string>> {
     const envPath = resolve(cwd, '.env')
     if (!existsSync(envPath)) return {}
 
@@ -897,7 +1067,10 @@ export async function readEnvFile (cwd: string):Promise<Record<string, string>> 
     return parseDotEnv(source)
 }
 
-export async function loadConfig (cwd: string, explicitPath?: string):Promise<LoadConfigResult> {
+export async function loadConfig (
+    cwd:string,
+    explicitPath?:string
+):Promise<LoadConfigResult> {
     const resolvedPath = explicitPath != null
         ? resolve(cwd, explicitPath)
         : findConfigPath(cwd)
@@ -912,12 +1085,14 @@ export async function loadConfig (cwd: string, explicitPath?: string):Promise<Lo
         const content = await readFile(resolvedPath, 'utf8')
         const json = JSON.parse(content)
         if (json == null || typeof json !== 'object') {
-            throw new Error(`Config file "${resolvedPath}" must export an object`)
+            throw new Error(
+                `Config file "${resolvedPath}" must export an object`
+            )
         }
 
         return {
             path: resolvedPath,
-            config: json as NatConfig
+            config: json as NoatConfig
         }
     }
 
@@ -932,11 +1107,11 @@ export async function loadConfig (cwd: string, explicitPath?: string):Promise<Lo
     }
 }
 
-function findConfigPath (cwd: string):string | null {
+function findConfigPath (cwd:string):string | null {
     const candidates = [
-        'nat.config.ts',
-        'nat.config.js',
-        'nat.config.json'
+        'noat.config.ts',
+        'noat.config.js',
+        'noat.config.json'
     ]
 
     for (const candidate of candidates) {
@@ -949,7 +1124,9 @@ function findConfigPath (cwd: string):string | null {
     return null
 }
 
-async function importTsConfig (configPath: string):Promise<Record<string, unknown>> {
+async function importTsConfig (
+    configPath:string
+):Promise<Record<string, unknown>> {
     const bundle = await build({
         entryPoints: [configPath],
         bundle: true,
@@ -966,102 +1143,92 @@ async function importTsConfig (configPath: string):Promise<Record<string, unknow
 
     const temporaryPath = resolve(
         tmpdir(),
-        `nat-config-${Date.now()}-${Math.random().toString(16).slice(2)}.mjs`
+        `noat-config-${Date.now()}-${Math.random().toString(16).slice(2)}.mjs`
     )
 
     await writeFile(temporaryPath, output, 'utf8')
 
     try {
-        return await import(pathToFileURL(temporaryPath).href + `?t=${Date.now()}`) as Record<string, unknown>
+        const cacheBust = `?t=${Date.now()}`
+        const moduleUrl = pathToFileURL(temporaryPath).href + cacheBust
+        return await import(moduleUrl) as Record<string, unknown>
     } finally {
         await rm(temporaryPath, { force: true })
     }
 }
 
-function extractConfigExport (moduleNamespace: Record<string, unknown>, filePath: string):NatConfig {
+function extractConfigExport (
+    moduleNamespace:Record<string, unknown>,
+    filePath:string
+):NoatConfig {
     const exported = moduleNamespace.default ?? moduleNamespace
     if (exported == null || typeof exported !== 'object') {
         throw new Error(`Config file "${filePath}" must export an object`)
     }
 
-    return exported as NatConfig
+    return exported as NoatConfig
 }
 
-export function normalizeConfig (params: {
-    cwd: string
-    env: Record<string, string | undefined>
-    config: NatConfig
-    postsDirOverride?: string
+export function normalizeConfig (params:{
+    configDir:string
+    env:Record<string, string|undefined>
+    config:NoatConfig
 }):ResolvedConfig {
-    const handle = resolveString(params.config.bluesky?.handle) ??
-        resolveString(params.config.handle) ??
-        resolveString(params.env.NAT_BLUESKY_HANDLE)
+    const handle = resolveString(params.config.handle) ??
+        resolveString(params.env.NOAT_BLUESKY_HANDLE)
 
     if (handle == null) {
-        throw new Error('Missing Bluesky handle. Configure "handle" in nat.config.* or NAT_BLUESKY_HANDLE in env.')
+        throw new Error(
+            'Missing Bluesky handle. Configure "handle" in noat.config.* ' +
+            'or NOAT_BLUESKY_HANDLE in env.'
+        )
     }
 
-    const pdsUrl = resolveString(params.config.bluesky?.pdsUrl) ??
-        resolveString(params.config.pdsUrl) ??
-        resolveString(params.env.NAT_BLUESKY_PDS_URL) ??
+    const pdsUrl = resolveString(params.config.pdsUrl) ??
+        resolveString(params.env.NOAT_BLUESKY_PDS_URL) ??
         DEFAULT_PDS_URL
 
-    const passwordEnvVar = resolveString(params.config.bluesky?.passwordEnvVar) ??
-        resolveString(params.config.passwordEnvVar) ??
+    const passwordEnvVar = resolveString(params.config.passwordEnvVar) ??
         DEFAULT_PASSWORD_ENV_VAR
+    const baseUrl = resolveString(params.config.baseUrl) ??
+        resolveString(params.env.NOAT_BASE_URL)
+    if (baseUrl == null) {
+        throw new Error(
+            'Missing baseUrl. Configure "baseUrl" in noat.config.* ' +
+            'or NOAT_BASE_URL in env.'
+        )
+    }
 
-    const postsDir = resolve(
-        params.cwd,
-        params.postsDirOverride ??
-            resolveString(params.config.postsDir) ??
-            DEFAULT_POSTS_DIR
-    )
-
-    const stateFile = resolve(
-        params.cwd,
-        resolveString(params.config.stateFile) ?? DEFAULT_STATE_FILE
-    )
+    const configuredPosts = resolveString(params.config.posts)
+    const postsDir = configuredPosts != null
+        ? resolve(params.configDir, configuredPosts)
+        : resolve(params.configDir, DEFAULT_POSTS_DIR)
 
     return {
         handle,
         pdsUrl,
         postsDir,
-        stateFile,
         passwordEnvVar,
-        postTextField: resolveString(params.config.postTextField) ?? DEFAULT_POST_TEXT_FIELD,
-        imageField: resolveString(params.config.imageField) ?? DEFAULT_IMAGE_FIELD,
-        imageAltField: resolveString(params.config.imageAltField) ?? DEFAULT_IMAGE_ALT_FIELD
+        baseUrl,
+        postTextField:
+            resolveString(params.config.postTextField) ??
+            DEFAULT_POST_TEXT_FIELD
     }
 }
 
-export async function loadState (stateFilePath: string):Promise<PublishState> {
-    if (!existsSync(stateFilePath)) {
-        return { version: 1, posts: {} }
+function extractConfigOverrides (options:PublishOptions):NoatConfig {
+    const config:NoatConfig = {}
+
+    if (options.handle != null) config.handle = options.handle
+    if (options.pdsUrl != null) config.pdsUrl = options.pdsUrl
+    if (options.postsDir != null) config.posts = options.postsDir
+    if (options.passwordEnvVar != null) {
+        config.passwordEnvVar = options.passwordEnvVar
     }
-
-    const source = await readFile(stateFilePath, 'utf8')
-    const parsed = JSON.parse(source)
-
-    if (parsed == null || typeof parsed !== 'object') {
-        throw new Error(`State file "${stateFilePath}" is invalid`)
+    if (options.postTextField != null) {
+        config.postTextField = options.postTextField
     }
+    if (options.baseUrl != null) config.baseUrl = options.baseUrl
 
-    const posts = (parsed as JsonRecord).posts
-    if (posts == null || typeof posts !== 'object') {
-        return { version: 1, posts: {} }
-    }
-
-    return {
-        version: 1,
-        posts: posts as Record<string, PublishedPostState>
-    }
-}
-
-export async function saveState (stateFilePath: string, state: PublishState):Promise<void> {
-    await mkdir(dirname(stateFilePath), { recursive: true })
-    await writeFile(
-        stateFilePath,
-        `${JSON.stringify(state, null, 4)}\n`,
-        'utf8'
-    )
+    return config
 }

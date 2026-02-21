@@ -1,105 +1,231 @@
-# nat
+# noat
 
-`nat` is a CLI for a git-first publishing pipeline. It treats your committed markdown posts as the source of truth, and publishes new/changed posts to Bluesky.
+Publish your blog posts to bluesky via a command line tool.
 
-## What It Does
+The `noat` command (pronounced like "note") reads posts from a git repo and
+publishes any markdown files that do not have `AT_URL` in frontmatter.
+It uploads a post excerpt plus a backlink to your blog URL.
 
-1. Loads config from `nat.config.ts`, `nat.config.js`, or `nat.config.json`.
-2. Reads `.env` for your Bluesky app password.
-3. Scans markdown files in a configured directory (`./posts` by default) from `HEAD`.
-4. Publishes only files that are new/changed since the last publish state.
-5. Uploads one referenced image blob per post (when configured).
 
-Only files committed in `HEAD` are considered publishable.
+<details><summary><h2>Contents</h2></summary>
 
-## Install + Build
+<!-- toc -->
+
+- [Install](#install)
+- [Example](#example)
+- [Publish](#publish)
+- [CLI](#cli)
+  * [Options](#options)
+  * [Help](#help)
+- [Configuration](#configuration)
+- [Environment Variables](#environment-variables)
+- [Post format](#post-format)
+- [Build pipeline integration](#build-pipeline-integration)
+- [Example folder](#example-folder)
+- [Notes](#notes)
+
+<!-- tocstop -->
+
+</details>
+
+## Install
 
 ```sh
-npm install
-npm run build
+npm i -S @atprism/noat
 ```
 
-## CLI Usage
+## Example
 
 ```sh
-node ./dist/cli.js publish
+npx noat publish
 ```
 
-Optional flags:
+This will publish all posts to bluesky using the defaults for everything.
+This assumes you have a `noat.config.js` file in the root with a
+value for `handle`, and a `.env` file with a variable
+`NOAT_BLUESKY_APP_PASSWORD` defined.
 
-- `--config <path>`
-- `--posts-dir <path>`
-- `--dry-run`
-- `--verbose`
 
-## Config
+---
 
-Create one of:
 
-- `nat.config.ts`
-- `nat.config.js`
-- `nat.config.json`
+## Publish
 
-Example:
+State is kept in the markdown files' frontmatter.
+
+* Requires a clean git state (no uncommited changes)
+* Posts with an `AT_URL` frontmatter field are treated as already published.
+* Only posts missing `AT_URL` are published.
+* All local state is kept in the markdown frontmatter
+* After publishing, `noat` writes `AT_URL` into the frontmatter for each file,
+  and creates a commit: `AT proto publish <n>`.
+
+
+## CLI
+
+```sh
+npx noat publish
+```
+
+### Help
+
+```sh
+npx noat help
+```
+
+
+## Configuration
+
+`noat` auto-loads the first file found in this order:
+
+1. `noat.config.ts`
+2. `noat.config.js`
+3. `noat.config.json`
+
+### Options
+
+`noat` reads config first, then applies CLI flags on top.
+If both are set, the CLI value wins.
+
+* `--config <path>`: Explicit config file path (CLI-only).
+* `--handle <value>`: Bluesky handle.
+* `--pds-url <value>`: Bluesky PDS URL.
+* `--posts <path>`: Markdown posts directory.
+* `--password-env-var <value>`: Env var name containing app password.
+* `--post-text-field <value>`: Frontmatter field used for post text.
+* `--base-url <value>`: Base URL prepended to frontmatter `slug`.
+* `--dry-run`: Show what would publish without sending API requests.
+* `--verbose`: Print resolved config details.
+* `--cwd <path>`: Run as if launched from another working directory.
+
+
+
+Example `noat.config.js`:
 
 ```js
 export default {
-    bluesky: {
-        handle: 'your-handle.bsky.social',
-        pdsUrl: 'https://bsky.social'
-    },
-    postsDir: './posts',
-    stateFile: './.nat/published.json',
-    postTextField: 'post',
-    imageField: 'image',
-    imageAltField: 'imageAlt'
+    cwd: '.',
+    handle: 'your-handle.bsky.social',
+    pdsUrl: 'https://bsky.social',  // <-- default
+    posts: './posts',  // <-- default
+    postTextField: 'post',  // <-- excerpt field, default is post text
+    baseUrl: 'https://blog.example.com/blog',
+    passwordEnvVar: 'NOAT_BLUESKY_APP_PASSWORD',  // <-- default
+    dryRun: false,
+    verbose: false
 }
 ```
 
-Defaults:
 
-- `pdsUrl`: `https://bsky.social`
-- `postsDir`: `./posts`
-- `stateFile`: `./.nat/published.json`
-- `postTextField`: `post`
-- `imageField`: `image`
-- `imageAltField`: `imageAlt`
-- `passwordEnvVar`: `NAT_BLUESKY_APP_PASSWORD`
+Config fields:
 
-## .env
+* `handle` (required): account handle.
+* `pdsUrl` (optional): defaults to `https://bsky.social`.
+* `passwordEnvVar` (optional): defaults to `NOAT_BLUESKY_APP_PASSWORD`.
+* `posts` (optional): defaults to `./posts`.
+* `postTextField` (optional): frontmatter field used for post text, defaults to `post`.
+* `baseUrl` (required): base URL prefixed to frontmatter `slug`
+  to build the post backlink.
+* `cwd` (optional): working directory for publish operations.
+* `dryRun` (optional): same behavior as `--dry-run`.
+* `verbose` (optional): same behavior as `--verbose`.
+
+Config-file keys and matching CLI flags:
+
+* `handle` -> `--handle`
+* `pdsUrl` -> `--pds-url`
+* `posts` -> `--posts`
+* `passwordEnvVar` -> `--password-env-var`
+* `postTextField` -> `--post-text-field`
+* `baseUrl` -> `--base-url`
+* `cwd` -> `--cwd`
+* `dryRun` -> `--dry-run`
+* `verbose` -> `--verbose`
+
+Path resolution rules:
+
+* `posts` is resolved relative to the config file directory.
+* If no config file is loaded, `posts` is resolved relative to current
+  working directory.
+
+
+## Environment Variables
+
+Store the app password in a local `.env` file (not committed):
 
 ```bash
-NAT_BLUESKY_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
+NOAT_BLUESKY_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"
 ```
 
-## Markdown Format
+## Post format
 
-Each post is markdown with frontmatter. The `post` field is used as Bluesky text by default.
+Posts are markdown files with YAML frontmatter.
+
+Example:
 
 ```md
 ---
 title: Launch post
 post: "Git is now the source of truth for publishing."
-image: ./images/launch.png
-imageAlt: Flow from markdown to Bluesky
+slug: "launch"
 ---
-Website body content goes here.
+
+Body content for your static site.
+
+![Diagram alt text](./images/launch.png)
 ```
 
-## Build Pipeline
+Publishing rules:
 
-Use this in your site build/deploy flow:
+* Bluesky text comes from frontmatter field `post`
+  (or your configured `postTextField`).
+* If that field is missing, fallback text is derived from markdown
+  body with image markdown removed.
+* A backlink to the blog post is inserted into every Bluesky post.
+* Backlink URL is built as `<baseUrl>/<slug>` when `slug` exists.
+* If `slug` is missing, backlink URL falls back to the markdown file's
+  local path + filename (without extension) relative to `posts`.
+* If no backlink URL can be resolved, publish fails for that post.
+* If the backlink is already in the text, it is not duplicated.
+* `AT_URL` is the publish marker. If present, that post is skipped.
+* After a successful publish, `noat` writes `AT_URL` with the Bluesky app URL
+  (for example `https://bsky.app/profile/<handle>/post/<id>`).
+* The first markdown image in the body (`![alt](path)`) is used as the
+  uploaded blob.
+* Image alt text comes from that markdown image's alt text.
+* Only repository file paths are supported for images
+  (no `http://`, `https://`, or `data:` URLs).
+* Supported image types: `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.avif`.
+
+Frontmatter after publish includes:
+
+```yaml
+AT_URL: "https://bsky.app/profile/your-handle.bsky.social/post/3laz2abc"
+```
+
+Backlink examples:
+
+* `baseUrl: "https://abc.com/blog"` with frontmatter `slug: "foo"`
+  becomes `https://abc.com/blog/foo`.
+* `baseUrl: "https://abc.com/blog/"` with frontmatter `slug: "/weekly note/"`
+  becomes `https://abc.com/blog/weekly%20note`.
+* With no `slug`, `posts/2026-02-01-launch.md` becomes
+  `https://abc.com/blog/2026-02-01-launch`.
+
+
+## Example
+
+See [./example](./example/).
+
+Run from repo root:
 
 ```sh
-npm run build
-node ./dist/cli.js publish
+node ./dist/cli.js publish --config ./example/noat.config.js --dry-run --verbose
 ```
 
-## Example Folder
+Then run without `--dry-run` to publish.
 
-See `example/` for a working sample:
+## Notes
 
-- `example/nat.config.js`
-- `example/.env.example`
-- `example/posts/*.md`
-- `example/.nat/published.json`
+* Requires Node.js 18+ (uses global `fetch`).
+* If git is dirty, publish exits with an error and does not post.
