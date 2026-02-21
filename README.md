@@ -25,6 +25,7 @@ collection of images, and I wanted a copy both on my website and on Bluesky.
 
 - [Install](#install)
 - [Example](#example)
+  * [Example Post Markdown](#example-post-markdown)
 - [Publish](#publish)
 - [CLI](#cli)
   * [Help](#help)
@@ -34,7 +35,7 @@ collection of images, and I wanted a copy both on my website and on Bluesky.
 - [Environment Variables](#environment-variables)
 - [Post format](#post-format)
 - [Publishing rules](#publishing-rules)
-- [Example](#example-1)
+- [Example Dir](#example-dir)
 - [Notes](#notes)
 
 <!-- tocstop -->
@@ -58,6 +59,22 @@ This assumes you have a `noat.config.js` file in the root with a
 value for `handle`, and a `.env` file with a variable
 `NOAT_BLUESKY_APP_PASSWORD` defined.
 
+### Example Post Markdown
+
+```md
+---
+title: An Example
+post: >
+    We just launched the one-to-many publishing pipeline. Git commits are now
+    our source of truth.
+slug: abc
+---
+
+This body text can exist for your website, but the Bluesky text comes from
+the frontmatter `post` field.
+
+![Diagram showing one post flowing to multiple destinations](./images/launch.png)
+```
 
 ---
 
@@ -228,7 +245,7 @@ Backlink examples:
   `https://abc.com/blog/2026-02-01-launch`.
 
 
-## Example
+## Example Dir
 
 See [./example](./example/).
 
