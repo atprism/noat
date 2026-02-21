@@ -1,33 +1,105 @@
-# template ts
-![tests](https://github.com/bicycle-codes/util/actions/workflows/nodejs.yml/badge.svg)
-[![types](https://img.shields.io/npm/types/@bicycle-codes/util?style=flat-square)](README.md)
-[![dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen.svg?style=flat-square)](package.json)
-[![semantic versioning](https://img.shields.io/badge/semver-2.0.0-blue?logo=semver&style=flat-square)](https://semver.org/)
-[![license](https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat-square)](LICENSE)
+# nat
 
-A template for typescript *dependency* modules that run in node. See [template-ts-browser](https://github.com/nichoth/template-ts-browser) for the same thing but targeting a browser environment.
+`nat` is a CLI for a git-first publishing pipeline. It treats your committed markdown posts as the source of truth, and publishes new/changed posts to Bluesky.
 
->
-> [!IMPORTANT]  
-> This builds to **ESM only**.
->
+## What It Does
 
-## use
+1. Loads config from `nat.config.ts`, `nat.config.js`, or `nat.config.json`.
+2. Reads `.env` for your Bluesky app password.
+3. Scans markdown files in a configured directory (`./posts` by default) from `HEAD`.
+4. Publishes only files that are new/changed since the last publish state.
+5. Uploads one referenced image blob per post (when configured).
 
-1. Use the template button in github. Or clone this then `rm -rf .git && git init`.
-2. `npm i && npm init`.
-3. Edit `README.md` -- change the CI badge URL + rewrite docs
-5. Edit the source code in `src/index.ts`, edit tests in `test`
+Only files committed in `HEAD` are considered publishable.
 
-## featuring
+## Install + Build
 
-* Compile the source to ESM, and put compiled files in `dist`.
-* Ignore `dist` and `*.js` in git, but don't ignore them in npm.
-  That way we don't commit any compiled code to git, but it is
-  available to consumers.
-* use npm's `prepublishOnly` hook to compile the code before publishing to npm.
-* use `exports` field in `package.json` to make sure the right format is used by consumers.
-* `preversion` npm hook -- lint via `standardx`.
-* `postversion` npm hook -- `git push && git push --tags && npm publish`
-* compile tests and run in a node environment
-* CI via github actions
+```sh
+npm install
+npm run build
+```
+
+## CLI Usage
+
+```sh
+node ./dist/cli.js publish
+```
+
+Optional flags:
+
+- `--config <path>`
+- `--posts-dir <path>`
+- `--dry-run`
+- `--verbose`
+
+## Config
+
+Create one of:
+
+- `nat.config.ts`
+- `nat.config.js`
+- `nat.config.json`
+
+Example:
+
+```js
+export default {
+    bluesky: {
+        handle: 'your-handle.bsky.social',
+        pdsUrl: 'https://bsky.social'
+    },
+    postsDir: './posts',
+    stateFile: './.nat/published.json',
+    postTextField: 'post',
+    imageField: 'image',
+    imageAltField: 'imageAlt'
+}
+```
+
+Defaults:
+
+- `pdsUrl`: `https://bsky.social`
+- `postsDir`: `./posts`
+- `stateFile`: `./.nat/published.json`
+- `postTextField`: `post`
+- `imageField`: `image`
+- `imageAltField`: `imageAlt`
+- `passwordEnvVar`: `NAT_BLUESKY_APP_PASSWORD`
+
+## .env
+
+```bash
+NAT_BLUESKY_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
+```
+
+## Markdown Format
+
+Each post is markdown with frontmatter. The `post` field is used as Bluesky text by default.
+
+```md
+---
+title: Launch post
+post: "Git is now the source of truth for publishing."
+image: ./images/launch.png
+imageAlt: Flow from markdown to Bluesky
+---
+Website body content goes here.
+```
+
+## Build Pipeline
+
+Use this in your site build/deploy flow:
+
+```sh
+npm run build
+node ./dist/cli.js publish
+```
+
+## Example Folder
+
+See `example/` for a working sample:
+
+- `example/nat.config.js`
+- `example/.env.example`
+- `example/posts/*.md`
+- `example/.nat/published.json`
