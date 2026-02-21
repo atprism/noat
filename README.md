@@ -6,7 +6,6 @@
 [![semantic versioning](https://img.shields.io/badge/semver-2.0.0-blue?logo=semver&style=flat-square)](https://semver.org/)
 [![Common Changelog](https://nichoth.github.io/badge/common-changelog.svg)](./CHANGELOG.md)
 [![install size](https://flat.badgen.net/packagephobia/install/@atprism/noat)](https://packagephobia.com/result?p=@atprism/noat)
-[![gzip size](https://flat.badgen.net/bundlephobia/minzip/@atprism/noat)](https://bundlephobia.com/package/@atprism/noat)
 [![license](https://img.shields.io/badge/license-Big_Time-blue?style=flat-square)](LICENSE)
 
 
