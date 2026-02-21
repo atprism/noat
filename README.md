@@ -25,13 +25,14 @@ It uploads a post excerpt plus a backlink to your blog URL.
 - [Example](#example)
 - [Publish](#publish)
 - [CLI](#cli)
-  * [Options](#options)
   * [Help](#help)
-- [Configuration](#configuration)
+- [Config](#config)
+  * [Options](#options)
+  * [Path resolution rules:](#path-resolution-rules)
 - [Environment Variables](#environment-variables)
 - [Post format](#post-format)
-- [Build pipeline integration](#build-pipeline-integration)
-- [Example folder](#example-folder)
+- [Publishing rules](#publishing-rules)
+- [Example](#example-1)
 - [Notes](#notes)
 
 <!-- tocstop -->

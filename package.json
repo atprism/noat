@@ -1,6 +1,6 @@
 {
   "name": "@atprism/noat",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Node + AT protocol",
   "type": "module",
   "exports": {
